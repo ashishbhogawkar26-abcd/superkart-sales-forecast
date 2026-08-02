@@ -4,11 +4,9 @@ services:
   backend:
     build: ./backend_files
     ports:
-      - "5000:5000"
-    environment:
-      - FLASK_APP=app.py
+      - "7860:7860"
     networks:
-      - app_network
+      - superkart_network
 
   frontend:
     build: ./frontend_files
@@ -17,8 +15,8 @@ services:
     depends_on:
       - backend
     networks:
-      - app_network
+      - superkart_network
 
 networks:
-  app_network:
+  superkart_network:
     driver: bridge
