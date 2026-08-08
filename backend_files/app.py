@@ -6,6 +6,7 @@ import traceback
 import joblib
 import pandas as pd
 from flask import Flask, jsonify, request
+from werkzeug.exceptions import HTTPException
 
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
@@ -32,8 +33,16 @@ def _bad_request(err):
     return jsonify({'error': str(err)}), 400
 
 
+@app.errorhandler(HTTPException)
+def _http_exception(err):
+    # Real HTTP errors (404, 405, ...) stay themselves instead of becoming 500s.
+    return jsonify({'error': err.name, 'status': err.code}), err.code
+
+
 @app.errorhandler(Exception)
 def _server_error(err):
+    if isinstance(err, HTTPException):
+        return err
     app.logger.error('Unhandled error:\n%s', traceback.format_exc())
     return jsonify({'error': 'Internal server error: ' + str(err)}), 500
 
@@ -73,6 +82,11 @@ def index():
 @app.get('/health')
 def health():
     return jsonify({'status': 'ok', 'n_features': len(input_features_order)})
+
+
+@app.get('/favicon.ico')
+def favicon():
+    return '', 204
 
 
 @app.post('/v1/predict')
