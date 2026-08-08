@@ -16,5 +16,6 @@ COPY streamlit_app.py .
 # Expose port 8501 (default for Streamlit)
 EXPOSE 8501
 
-# Run the Streamlit application
-CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# Run the Streamlit application.
+# XSRF and CORS checks are disabled because this container runs behind the
+# GitHub Codespaces reverse proxy, which rewrites Host/Or
