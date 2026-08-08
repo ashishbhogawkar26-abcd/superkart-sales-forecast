@@ -1,19 +1,8 @@
 # SuperKart sales-forecasting API.
-#
-# Fixes applied compared with the previous version:
-#  * engineered feature names come from preprocessor.get_feature_names_out()
-#    instead of being rebuilt here from a second, duplicated set of hardcoded
-#    column lists that could silently drift away from training;
-#  * unknown or misspelt category values are rejected with an HTTP 400 naming
-#    the column and the offending value. The encoder previously used
-#    handle_unknown='ignore', so "Small" instead of "Low" became all zeros and
-#    still returned a confident-looking number;
-#  * caller mistakes return 400 while genuine server faults return 500, and the
-#    traceback is logged server-side instead of being swallowed entirely;
-#  * Store_Id is no longer a model input, so Batch_Data_SuperKart.csv validates
-#    as-is and no fabricated default store has to be injected.
 import io
 import logging
+import traceback
+
 import joblib
 import pandas as pd
 from flask import Flask, jsonify, request
@@ -38,28 +27,87 @@ class BadRequest(Exception):
     pass
 
 
-    @app.errorhandler(BadRequest)
-    def _bad_request(err):
-        return jsonify({'error': str(err)}), 400
+@app.errorhandler(BadRequest)
+def _bad_request(err):
+    return jsonify({'error': str(err)}), 400
 
 
-        def validate(df):
-            missing = [c for c in input_features_order if c not in df.columns]
-                if missing:
-                        raise BadRequest('Missing required column(s): ' + str(missing))
-                            df = df[input_features_order].copy()
-                                for col in numeric_features:
-                                        values = pd.to_numeric(df[col], errors='coerce')
-                                                if values.isna().any():
-                                                            raise BadRequest("Column '" + col + "' must be numeric")
-                                                                    df[col] = values
-                                                                        for col, allowed in allowed_categories.items():
-                                                                                unknown = sorted(set(df[col].astype(str)) - set(allowed))
-                                                                                        if unknown:
-                                                                                                    raise BadRequest("Column '" + col + "' has unknown value(s) " + str(unknown) + '; allowed: ' + str(allowed))
-                                                                                                        return df
+@app.errorhandler(Exception)
+def _server_error(err):
+    app.logger.error('Unhandled error:\n%s', traceback.format_exc())
+    return jsonify({'error': 'Internal server error: ' + str(err)}), 500
 
 
-                                                                                                        def score(df):
-                                                                                                            processed = pd.DataFrame(preprocessor.transform(df), columns=engineered_feature_names)
-                                                                                                                return model.predict(processed)
+def validate(df):
+    missing = [c for c in input_features_order if c not in df.columns]
+    if missing:
+        raise BadRequest('Missing required column(s): ' + str(missing))
+    df = df[input_features_order].copy()
+    for col in numeric_features:
+        values = pd.to_numeric(df[col], errors='coerce')
+        if values.isna().any():
+            raise BadRequest("Column '" + col + "' must be numeric")
+        df[col] = values
+    for col, allowed in allowed_categories.items():
+        unknown = sorted(set(df[col].astype(str)) - set(allowed))
+        if unknown:
+            raise BadRequest("Column '" + col + "' has unknown value(s) " + str(unknown) +
+                             '; allowed: ' + str(allowed))
+    return df
+
+
+def score(df):
+    processed = pd.DataFrame(preprocessor.transform(df), columns=engineered_feature_names)
+    return model.predict(processed)
+
+
+@app.get('/')
+def index():
+    return jsonify({
+        'service': 'SuperKart sales forecast API',
+        'endpoints': ['/health', '/v1/predict', '/v1/predictbatch'],
+        'expected_columns': input_features_order,
+    })
+
+
+@app.get('/health')
+def health():
+    return jsonify({'status': 'ok', 'n_features': len(input_features_order)})
+
+
+@app.post('/v1/predict')
+def predict():
+    payload = request.get_json(silent=True)
+    if payload is None:
+        raise BadRequest('Request body must be JSON')
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list) or not payload:
+        raise BadRequest('JSON body must be an object or a non-empty list of objects')
+
+    df = validate(pd.DataFrame(payload))
+    preds = score(df)
+    if len(preds) == 1:
+        return jsonify({'prediction': float(preds[0])})
+    return jsonify({'predictions': [float(p) for p in preds]})
+
+
+@app.post('/v1/predictbatch')
+def predict_batch():
+    if 'file' not in request.files:
+        raise BadRequest("No file part named 'file' in the request")
+    raw = request.files['file'].read()
+    if not raw:
+        raise BadRequest('Uploaded file is empty')
+    try:
+        batch = pd.read_csv(io.BytesIO(raw))
+    except Exception as exc:
+        raise BadRequest('Could not parse uploaded file as CSV: ' + str(exc))
+
+    df = validate(batch)
+    preds = score(df)
+    return jsonify({str(i): float(p) for i, p in enumerate(preds)})
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=7860)
